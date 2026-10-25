@@ -1,0 +1,138 @@
+{
+  "_readme": "Starting rules for the data-driven engine. They look at the TEXT ONLY, never at performance. Weights and wording are first guesses written while analysing one brand: they are NOT validated. The app tests them on every run (how often content score orders templates the same way as click rate) and reports it. Tune them from that evidence. 'designed_with' lists brands whose results were looked at while writing the rules. For those brands the text-only match is not an independent test and the engine says so.",
+  "thresholds": {
+    "high": 3.0,
+    "medium": 1.5
+  },
+  "thin_title_words": 4,
+  "long_description_words": 35,
+  "many_variables": 5,
+  "shouty_caps_share": 0.25,
+  "shouty_exclaims": 2,
+  "watch": [
+    {
+      "id": "no_benefit_named",
+      "weight": 2.0,
+      "h": "No offer named",
+      "b": "No price, amount, code or benefit appears in the text, so the reader cannot tell what they get.",
+      "rec": "**Name the offer with a number, price or code** in the title or the first line of the description.",
+      "guardrails": []
+    },
+    {
+      "id": "not_quantified",
+      "weight": 1.0,
+      "h": "Offer not quantified in the text",
+      "b": "A benefit is named but no number, price or code appears in the text. A figure that lives only in the image disappears if the image does not load.",
+      "rec": "**Name the offer with a number, price or code** in the title or the first line of the description.",
+      "guardrails": []
+    },
+    {
+      "id": "chance_based",
+      "weight": 2.0,
+      "h": "A chance, not a sure benefit",
+      "b": "Language such as win, chance, lucky or giveaway asks a mass audience to act for an uncertain reward.",
+      "rec": "**Replace chance-based language with a sure benefit,** or state the entry rule and the prize up front.",
+      "guardrails": []
+    },
+    {
+      "id": "urgency_no_benefit",
+      "weight": 2.0,
+      "h": "Urgency with nothing named",
+      "b": "A deadline is pressed but no benefit, price or code is named, so the urgency has nothing behind it.",
+      "rec": "**Pair every deadline with a concrete benefit.**",
+      "guardrails": [
+        "G3",
+        "G7"
+      ]
+    },
+    {
+      "id": "floor_or_ceiling",
+      "weight": 1.0,
+      "h": "A floor or ceiling, not an offer",
+      "b": "Wording such as min or up to tells the reader the worst or best case, not what they get.",
+      "rec": "**State the actual offer** rather than a minimum or a maximum.",
+      "guardrails": []
+    },
+    {
+      "id": "long_description",
+      "weight": 1.0,
+      "h": "Long description",
+      "b": "The description runs past the point where a reader will finish it.",
+      "rec": "**Cut the description** to the offer, the rule and one action.",
+      "guardrails": []
+    },
+    {
+      "id": "many_variables",
+      "weight": 1.0,
+      "h": "Many variables",
+      "b": "Several variables raise the chance that one renders blank or wrong.",
+      "rec": "**Use fewer variables** and test that each renders for every recipient.",
+      "guardrails": []
+    },
+    {
+      "id": "shouty",
+      "weight": 0.5,
+      "h": "Capitals and exclamation marks",
+      "b": "Heavy capitals and repeated exclamation marks can read as noise.",
+      "rec": "**Tone down capitals and exclamation marks.**",
+      "guardrails": []
+    },
+    {
+      "id": "competing_actions",
+      "weight": 1.0,
+      "h": "Two competing actions",
+      "b": "The text asks the reader to type or send a reply as well as tapping the button, which splits intent.",
+      "rec": "**Keep one action per card.** Do not ask for a typed reply next to a button.",
+      "guardrails": []
+    },
+    {
+      "id": "thin_title",
+      "weight": 1.0,
+      "h": "Title carries little information",
+      "b": "The title is short and holds no number, so the part most likely to be read says little.",
+      "rec": "**Put the offer in the title.**",
+      "guardrails": []
+    }
+  ],
+  "works": [
+    {
+      "id": "has_number",
+      "h": "A concrete number",
+      "b": "A price, amount, percentage or quantity appears in the text itself."
+    },
+    {
+      "id": "has_code",
+      "h": "A code to redeem",
+      "b": "A code gives the reader something specific to use."
+    },
+    {
+      "id": "short_text",
+      "h": "Short text",
+      "b": "The whole card text is brief enough to read in one glance."
+    },
+    {
+      "id": "single_action",
+      "h": "One clear action",
+      "b": "The text asks for one thing, the button."
+    }
+  ],
+  "dos": [
+    "Lead with the most specific offer: a price, a code or a named benefit",
+    "Pair any deadline with a concrete benefit",
+    "Make the image and the text say the same thing",
+    "Keep the rule and the deadline within the first two lines",
+    "Use one offer and one clear action per card",
+    "Put any figure that matters in the text, not only in the image"
+  ],
+  "donts": [
+    "Use sweepstakes language for mass sends",
+    "Use a minimum or a maximum in place of the offer",
+    "Push urgency with nothing named",
+    "Draw a button into the image",
+    "Stack several propositions or conditions in one card",
+    "Send repeated promos to the same audience without a frequency cap"
+  ],
+  "designed_with": [
+    "Nykaa"
+  ]
+}

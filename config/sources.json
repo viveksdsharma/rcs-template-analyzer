@@ -1,0 +1,27 @@
+{
+  "_readme": "Maps the column names of a data source to the app's canonical names. To support another export format add a profile. Matching ignores case and extra spaces. The app stops and lists any required column it cannot find.",
+  "valuefirst_portal": {
+    "required": {
+      "date": ["Date"],
+      "brand": ["Brand"],
+      "google_id": ["GoogleID"],
+      "message_type": ["MessageType"],
+      "template": ["Template"],
+      "submitted": ["Messages Submitted"],
+      "sent": ["Messages Sent"],
+      "delivered": ["Messages Delivered"],
+      "read": ["Messages Read"],
+      "failed": ["Messages Failed"],
+      "expired": ["Messages Expired"],
+      "delivery_rate_sheet": ["Messages DeliveryRate", "DeliveryRate"],
+      "read_rate_sheet": ["ReadRate"],
+      "p2a_responses": ["P2AResponses"],
+      "p2a_rate_sheet": ["P2AResponseRate"]
+    },
+    "optional": {
+      "aggregator": ["Aggregator"],
+      "agent_name": ["AgentName"],
+      "agent_id": ["AgentID"]
+    }
+  }
+}

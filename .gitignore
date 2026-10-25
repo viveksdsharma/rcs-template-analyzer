@@ -1,0 +1,11 @@
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+.venv/
+out/
+history*.csv
+*.xlsx
+!tests/fixtures/*.xlsx
+# The Vi template carries a Vodafone Idea sensitivity label. Keep it out of any repository unless the repo is
+# private and InfoSec has agreed. The app also lets you upload it per session.
+assets/*.pptx

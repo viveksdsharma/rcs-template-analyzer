@@ -1,0 +1,23 @@
+{
+  "_readme": "The knowledge pack. It is added to every LLM prompt and used by the rules engine. Every item has an ID and a source. Edit this file, not the code. Items marked to_be_vetted must be confirmed by their owner before the app is used for real brands.",
+  "guardrails": [
+    {"id": "G1", "text": "Reminder messages with an assuring tone get a higher CTA rate than urgent ones; urgent tone in reminders reads as nagging.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External), guardrail: tone x intent", "status": "to_be_vetted"},
+    {"id": "G2", "text": "BFSI, insurance and healthcare informational and transactional messages perform best in a formal tone.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External)", "status": "to_be_vetted"},
+    {"id": "G3", "text": "Promotional pushes are the exception to G1: urgent tone drives action where the intent itself is time-bound.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External)", "status": "to_be_vetted"},
+    {"id": "G4", "text": "Regional-language text builds trust and eases absorption; a CTA in the regional language lifts clicks further. Tune tone and idiom, do not only translate.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External), guardrail: language", "status": "to_be_vetted"},
+    {"id": "G5", "text": "Match CTA specificity to the funnel stage: generic CTAs (Know More) suit exploration; specific CTAs (Book Now, Pay Now) suit decision stage and pair with urgency; for high-commitment categories (loans, insurance) generic CTAs such as Check Eligibility are preferred.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External), guardrail: CTA design", "status": "to_be_vetted"},
+    {"id": "G6", "text": "Segmentation, frequency control and structured A/B testing protect read rate at scale; broad blasts to uninterested users are the biggest driver of spam complaints.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External), foundations", "status": "to_be_vetted"},
+    {"id": "G7", "text": "Use decision CTAs (Book Now, Pay Now) only once value and urgency have both been communicated.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External), rule of thumb", "status": "to_be_vetted"},
+    {"id": "G8", "text": "Industry by tone quick reference: BFSI formal; ecommerce urgent; retail and healthcare assuring.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External), cheat sheet", "status": "to_be_vetted"}
+  ],
+  "platform_facts": [
+    {"id": "P1", "text": "A rich card can hold media (image, GIF, video, PDF), title text, description text and suggested replies and actions. At least one of media, title or description is required.", "source": "Google RCS for Business: Rich cards (developers.google.com), checked 2026-10", "status": "verified"},
+    {"id": "P2", "text": "Media height is short (112 DP), medium (168 DP) or tall (264 DP). If the media does not match the chosen height it is zoomed and centre-cropped; a thumbnail can be specified to control what shows.", "source": "Google RCS for Business: Rich cards, checked 2026-10", "status": "verified"},
+    {"id": "P3", "text": "Selecting the media preview or thumbnail opens a full-screen view of the media; it does not follow the card's button link.", "source": "Google RCS for Business: Rich cards, checked 2026-10", "status": "verified"}
+  ],
+  "do_not_assert": [
+    "That the notification preview shows exactly N characters of the title or description (the character limit is not verified). Say 'the preview may cut the text' only.",
+    "Any claim about how an operator, handset or Google client changed behaviour between two periods.",
+    "Any causal claim about visits, orders or conversion: the performance sheet holds none of these."
+  ]
+}

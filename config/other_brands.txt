@@ -1,0 +1,3 @@
+# Optional. One name per line. A run for brand X is blocked if any OTHER name below appears in its text or image names.
+# Leave this file empty in the repository: a list of brand names is a list of your clients.
+# Put the real list in Secrets instead (OTHER_BRANDS = "Brand A, Brand B, Brand C"), or type names in the sidebar.

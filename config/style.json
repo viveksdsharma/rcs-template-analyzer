@@ -1,0 +1,7 @@
+{
+  "_readme": "House style for files that go to a brand. Change here, not in code.",
+  "docx_font": "Times New Roman",
+  "heading_color": "C00000",
+  "table_header_fill": "CC0000",
+  "blocked_phrases": ["C2 - Vodafone Idea Internal", "C2 \u2013 Vodafone Idea Internal", "Vodafone Idea Internal", "Vodafone Idea Confidential", "Vi internal", "internal use only", "Classification: C2"]
+}
