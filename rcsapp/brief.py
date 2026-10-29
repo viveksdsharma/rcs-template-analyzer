@@ -16,13 +16,14 @@ RULES = """RULES (follow all of them)
 2. P2AResponseRate is the CLICK RATE. Call it "click rate (P2AResponseRate)". Never call it P2A.
 3. Use the sheet's own names: Messages Submitted, DeliveryRate, ReadRate, P2AResponseRate. Ratios marked * are calculated from the sheet counts.
 4. Rate each template's content risk (Low, Medium, High) from its content alone. Never let a result decide the rating.
-5. Every template is a single send date unless told otherwise. Say findings are directional, not proven. Do not claim causes the data cannot show: visits, orders, audience, send time and device split are not in this data.
+5. Every template is a single send date unless told otherwise. Say findings are directional, not proven. Do not claim causes the data cannot show: visits, orders, audience, send time and device split are not in this data. Brands do not share targeting, so never guess the audience.
 6. Compare periods (if two are given) before concluding. A pattern seen in one period only is a hypothesis.
 7. "Creative" means the image. "Text" means the card title and description. Do not use the word "copy".
 8. The files go to the brand's partner. No internal classification text, no Vi commercial figures, no other brand's name, no section numbers in the text.
 9. State platform behaviour only if it is in the knowledge pack. Cite guardrail IDs (G1, G2...) in "guardrails" on a recommendation when you rely on one.
 10. Be specific and short. Each point: a short heading "h" and one or two sentences "b".
-11. Proposed wording goes only in "variations". Use placeholders such as [v1] and [price] for variables. Do not invent offers, prices or dates."""
+11. Proposed wording goes only in "variations". Use placeholders such as [v1] and [price] for variables. Do not invent offers, prices or dates.
+12. If an image is attached, say what it shows and whether it agrees with the text (offer, code, button, deadline). If you cannot see an image, review the text alone and do not describe an image."""
 
 SYSTEM = ("You are a senior RCS template analyst at a telecom messaging team. You write precise, evidence-based template reviews for "
           "brands and their messaging partners. You answer with one JSON object and nothing else.")
@@ -137,17 +138,3 @@ def step2_prompt(request, metrics, template_reviews, knowledge):
         "Return ONE JSON object with exactly this structure. Compare the content ratings with the click rates honestly: say where they agree and where they do not. "
         "Leave yoy_commentary empty if there is only one period. Write 4 to 9 findings and 8 to 11 recommendations; every recommendation needs text, why, owner, priority.\n```json\n"
         + json.dumps(global_skeleton(), indent=1) + "\n```"])
-
-
-def full_brief(request, metrics, knowledge):
-    """One single prompt for manual use (paste into Copilot chat with the screenshots)."""
-    parts = ["# Template analysis brief\n", "Do both steps below in one answer. Return one JSON object that contains a 'templates' list "
-             "(one entry per template, each with 'template' plus the step 1 fields) and all the step 2 fields.\n", RULES,
-             knowledge_text(knowledge, request.get("vertical")), request_block(request), "## STEP 1 (content only: rate before reading the performance section)"]
-    for t in request["templates"]:
-        parts.append(card_block(t))
-    parts += ["## STEP 2 (performance)", performance_block(metrics)]
-    sk = global_skeleton()
-    sk["templates"] = [dict(template_skeleton(), template=t["template"]) for t in request["templates"]]
-    parts += ["## OUTPUT", "```json\n" + json.dumps(sk, indent=1) + "\n```"]
-    return "\n\n".join(parts)

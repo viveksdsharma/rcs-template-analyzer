@@ -1,9 +1,9 @@
 """
-Checks that run before any file is produced. Errors block the build; warnings are listed.
+The check layer. It runs on every analysis before any file is produced. Errors block the build; warnings are listed.
 
   1. Schema check      the analysis has every required part and covers every template in the sheet.
-  2. Number check      every number in the narrative is computed from the sheet, quoted from the request / card text,
-                       or declared in "external_numbers" with its source. Nothing else gets through.
+  2. Number check      every number in the text is computed from the sheet, quoted from the request / card text,
+                       or declared in "external_numbers" with its source. A wrong or invented number blocks the build.
   3. Confidentiality   no internal classification text, and no other brand's name or image in this run.
   4. Mandatory caveat  if every template is a single send date, the analysis must say findings are directional.
   5. Guardrail IDs     a recommendation may only cite guardrail IDs that exist in the knowledge pack.
@@ -15,6 +15,8 @@ import itertools
 import math
 import os
 import re
+
+from .metrics import rates_from_counts
 
 RISK = {"Low", "Medium", "High"}
 STATUS_CLASS = {"supported", "directional", "plausible", "not_driver", "unknown"}
@@ -131,10 +133,23 @@ def allowed_numbers(m):
             if tot_s:
                 pct.add(100 * s / tot_s)
             if r:
-                pct.add(100 * c / r)          # pooled click rate of the subset
+                pct.add(100 * c / r)
             big.update([c, r, s])
             for k in ("sent", "delivered", "failed", "expired"):
                 big.add(sum(t["counts"][k] for t in sub))
+
+    # pooled figures for a template sent more than once, and its index against the period's blended click rate
+    by_tpl = {}
+    for t in m["templates"]:
+        by_tpl.setdefault((t["year"], t["template"]), []).append(t)
+    for (yr, _), ts in by_tpl.items():
+        sums = {k: sum(t["counts"][k] for t in ts) for k in ts[0]["counts"]}
+        big.update(sums.values())
+        rt = rates_from_counts(sums)
+        add_rates(rt)
+        blended = m["groups"]["year"].get(str(yr), {}).get("rates", {}).get("P2AResponseRate")
+        if blended and rt["P2AResponseRate"]:
+            fold.update([rt["P2AResponseRate"] / blended, blended / rt["P2AResponseRate"]])
     return {"pct": pct, "fold": fold, "big": big, "pts": pts}
 
 
@@ -154,6 +169,8 @@ def _external_texts(analysis, request, knowledge=None):
 
 
 def external_values(analysis, request=None, knowledge=None):
+    """Numbers allowed from outside the sheet, typed by how they were written: a % only vouches for a %,
+    an x only for an x. 'any' (every number) is used only for counts and M/K figures."""
     typed = {"pct": set(), "fold": set(), "big": set(), "mk": set(), "pts": set(), "any": set()}
     for txt in _external_texts(analysis, request, knowledge):
         txt = str(txt)
@@ -195,15 +212,39 @@ def check_numbers(analysis, metrics, request=None, knowledge=None):
     return problems
 
 
+def _alnum(s):
+    return re.sub(r"[^a-z0-9]", "", str(s).lower().replace("\u2019", ""))
+
+
+def same_brand(a, b):
+    """True when two names plausibly refer to the same brand ('Axis' and 'Axis Bank Limited', 'bigbasket' and its legal entity)."""
+    na, nb = _alnum(a), _alnum(b)
+    if not na or not nb:
+        return False
+    if na in nb or nb in na:
+        return True
+    fa = re.findall(r"[a-z0-9]+", str(a).lower().replace("\u2019", ""))
+    fb = re.findall(r"[a-z0-9]+", str(b).lower().replace("\u2019", ""))
+    return bool(fa and fb and len(fa[0]) >= 4 and fa[0] == fb[0])
+
+
 def _blocked_brands(request, other_brands_path, extra=None):
-    own = " ".join([str(request.get("brand", "")), str(request.get("brand_display", ""))]).lower()
+    own_names = [str(request.get("brand", "")), str(request.get("brand_display", ""))]
+    own_names = [o for o in own_names if o.strip()]
     brands = list(extra or [])
     if other_brands_path and os.path.exists(other_brands_path):
         with open(other_brands_path, encoding="utf-8") as f:
             brands += [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
-    if not own.strip():
+    if not own_names:
         return []
-    return [b for b in brands if b.lower() not in own]
+    out, seen = [], set()
+    for b in brands:
+        b = str(b).strip()
+        if not b or b.lower() in seen or any(same_brand(b, o) for o in own_names):
+            continue
+        seen.add(b.lower())
+        out.append(b)
+    return out
 
 
 def check_confidentiality(analysis, request, style, other_brands_path=None, extra_brands=None):
@@ -280,7 +321,7 @@ def check_schema(analysis, request, metrics, known_guardrails=None):
 
 
 def check_template_fragment(frag, template_name, request, style, other_brands_path=None, extra_brands=None, card_text=""):
-    """Validate one template review returned by a model (step 1 of the LLM engine). Returns a list of problem strings."""
+    """Validate one template review returned by a model (step 1 of the language-model engine). Returns a list of problem strings."""
     p = []
     if frag.get("content_risk") not in RISK:
         p.append(f"content_risk must be Low, Medium or High (got {frag.get('content_risk')!r}).")

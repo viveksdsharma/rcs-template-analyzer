@@ -1,6 +1,10 @@
 """
-One function, run_job(), does everything the app needs. The Streamlit page is a thin layer on top of it,
+One function, run_job(), does everything the analysis page needs. The Streamlit page is a thin layer on top of it,
 so the same code can be tested without a browser and reused later (for example behind a scheduled trigger).
+
+Engines:  "ml"   the Internal ML model (text scoring and, once the history is large enough, a trained component)
+          "llm"  the open-source language model behind a hosted OpenAI-compatible endpoint
+          "both" both, with the differences shown to the reviewer
 """
 import hashlib
 import io
@@ -10,18 +14,18 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 
-import pandas as pd
-
-from . import CONFIG
+from . import ASSETS, CONFIG
 from . import check as C
 from . import inputs as I
 from . import metrics as M
+from . import training as T
 from .engines import llm_engine as L
 from .engines import ml_engine as E
 from .engines import reconcile as R
 from .knowledge import load_knowledge, load_rules, unvetted
 
 OTHER_BRANDS = os.path.join(CONFIG, "other_brands.txt")
+BUNDLED_TEMPLATE = os.path.join(ASSETS, "vi_template.pptx")
 
 
 @dataclass
@@ -38,12 +42,12 @@ class JobInput:
     requester: str = ""
     images: dict = field(default_factory=dict)        # file name -> bytes
     outputs: tuple = ("docx", "pdf", "pptx")
-    engine: str = "rules"              # rules | llm | both | manual
+    engine: str = "ml"                 # ml | llm | both
     llm_cfg: object = None
     llm_consent: bool = False
-    manual_json: str = ""
-    vi_template_bytes: bytes = None
-    history_bytes: bytes = None
+    template_bytes: bytes = None       # a PowerPoint template uploaded for this run; None means the bundled one
+    history: object = None             # training history (DataFrame), normally loaded from the bundled seed
+    cohort_rules: str = ""
     extra_blocked_brands: list = field(default_factory=list)
     analyst: str = "Vi"
 
@@ -54,7 +58,7 @@ class JobResult:
     files: dict = field(default_factory=dict)
     issues: list = field(default_factory=list)
     analysis: dict = None
-    analysis_rules: dict = None
+    analysis_ml: dict = None
     analysis_llm: dict = None
     metrics: dict = None
     agreement: list = field(default_factory=list)
@@ -71,8 +75,12 @@ def _load_json(path):
         return json.load(f)
 
 
+def _read(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def preflight(inp):
-    """Plain-words list of what is missing."""
     p = []
     if not inp.sheet_bytes:
         p.append("Upload the portal sheet.")
@@ -91,8 +99,6 @@ def preflight(inp):
             p.append("The language model is not configured (base URL and model are missing in the secrets).")
         elif not inp.llm_consent:
             p.append(f"Tick the box to confirm this data may be sent to {inp.llm_cfg.host}.")
-    if inp.engine == "manual" and not str(inp.manual_json).strip():
-        p.append("Paste the JSON answer from Copilot, or choose another engine.")
     return p
 
 
@@ -100,7 +106,7 @@ def _brief_request(inp, metrics, tmp):
     cur = max(metrics["meta"]["years"])
     year_of = {t["template"]: t["year"] for t in metrics["templates"]}
     matched = I.match_images([t["template"] for t in inp.templates], inp.images)
-    cur_t, ref_t = [], []
+    cur_t, ref_t, notes = [], [], []
     img_dir = os.path.join(tmp, "images")
     for t in inp.templates:
         name = t["template"]
@@ -112,20 +118,21 @@ def _brief_request(inp, metrics, tmp):
             try:
                 entry["image"] = I.save_image(inp.images[fname], img_dir, name)
             except Exception:
-                pass
+                notes.append(f"The image for '{name}' ({fname}) could not be read, so this template goes without a picture.")
         (cur_t if year_of.get(name) == cur else ref_t).append(entry)
-    return {"brand": inp.brand, "brand_display": inp.brand_display or inp.brand, "vertical": inp.vertical, "period": inp.period,
-            "period_labels": inp.period_labels, "requester": inp.requester, "issue": inp.issue.strip(), "templates": cur_t,
-            "reference_templates": ref_t, "images_dir": "images"}, img_dir
+    req = {"brand": inp.brand, "brand_display": inp.brand_display or inp.brand, "vertical": inp.vertical, "period": inp.period,
+           "period_labels": inp.period_labels, "requester": inp.requester, "issue": inp.issue.strip(), "templates": cur_t,
+           "reference_templates": ref_t, "images_dir": "images"}
+    return req, img_dir, notes
 
 
-def _merge_for_files(final, rules_a):
+def _merge_for_files(final, ml_a):
     """Deterministic parts always come from code; model parts override where present."""
     out = dict(final)
     for key in ("feature_matrix", "reference_templates"):
-        if rules_a.get(key) and not out.get(key):
-            out[key] = rules_a[key]
-    deck = dict(rules_a.get("deck", {}))
+        if ml_a.get(key) and not out.get(key):
+            out[key] = ml_a[key]
+    deck = dict(ml_a.get("deck", {}))
     deck.update({k: v for k, v in (final.get("deck") or {}).items() if v})
     out["deck"] = deck
     return out
@@ -157,85 +164,69 @@ def run_job(inp, log=print, analysis_override=None):
         return res
 
     with tempfile.TemporaryDirectory() as tmp:
-        request, img_dir = _brief_request(inp, metrics, tmp)
+        request, img_dir, img_notes = _brief_request(inp, metrics, tmp)
         res.request = request
-        extra = [b.strip() for b in inp.extra_blocked_brands if b.strip()]
+        res.issues += [{"level": "info", "code": "image_unreadable", "message": n} for n in img_notes]
+        extra = [b.strip() for b in inp.extra_blocked_brands if b and b.strip()]
+        history = inp.history if inp.history is not None and len(inp.history) else None
 
-        history = None
-        if inp.history_bytes:
-            try:
-                history = pd.read_csv(io.BytesIO(inp.history_bytes))
-            except Exception as e:
-                res.issues.append({"level": "warn", "code": "history", "message": f"The history file could not be read and was ignored: {e}"})
-
-        say("Rules engine")
-        rules_a, info = E.build_analysis(metrics, request, knowledge, rules, history=history, analyst=inp.analyst)
-        res.analysis_rules, res.engine_info["rules"] = rules_a, info
+        say("Internal ML model")
+        ml_a, info = E.build_analysis(metrics, request, knowledge, rules, history=history, analyst=inp.analyst)
+        res.analysis_ml, res.engine_info["ml"] = ml_a, info
 
         llm_a = None
         if analysis_override is not None:
             pass
         elif inp.engine in ("llm", "both"):
-            say(f"Language model engine ({inp.llm_cfg.model} at {inp.llm_cfg.host})")
+            say(f"Open-source LLM ({inp.llm_cfg.model} at {inp.llm_cfg.host})")
             try:
                 llm_a, problems, trace = L.run_llm_engine(inp.llm_cfg, request, metrics, knowledge, style, OTHER_BRANDS, extra, img_dir, log=say)
-                res.engine_info["llm"] = {"model": inp.llm_cfg.model, "host": inp.llm_cfg.host, "calls": len(trace), "trace": trace}
+                res.engine_info["llm"] = {"model": inp.llm_cfg.model, "host": inp.llm_cfg.host, "vision": bool(inp.llm_cfg.vision),
+                                          "calls": len([t for t in trace if "attempt" in t]), "trace": trace}
+                res.issues += [{"level": "info", "code": "image_not_used", "message": f"{t['label']}: {t['note']}"} for t in trace if t.get("note")]
                 if problems:
                     res.issues += [{"level": "error", "code": "llm_checks", "message": m} for m in problems]
                     llm_a = None if inp.engine == "llm" else llm_a
             except L.LLMError as e:
                 res.issues.append({"level": "error" if inp.engine == "llm" else "warn", "code": "llm_error", "message": str(e)})
                 llm_a = None
-        elif inp.engine == "manual":
-            try:
-                llm_a, problems = L.parse_manual(inp.manual_json, request, metrics, knowledge, style, OTHER_BRANDS, extra)
-                res.issues += [{"level": "error", "code": "manual_checks", "message": m} for m in problems]
-            except Exception as e:
-                res.issues.append({"level": "error", "code": "manual_json", "message": f"The pasted answer could not be read: {e}"})
         res.analysis_llm = llm_a
 
-        # choose the analysis the files are built from
         final, notes = None, []
         if analysis_override is not None:
             final = analysis_override
             notes.append("The analysis was edited by a reviewer before the files were built.")
-        elif inp.engine == "rules":
-            final = rules_a
-        elif inp.engine in ("llm", "manual"):
+        elif inp.engine == "ml":
+            final = ml_a
+        elif inp.engine == "llm":
             final = llm_a
-        else:  # both
+        else:
             if llm_a is not None and not any(i["code"] == "llm_checks" for i in res.issues):
-                res.agreement, summ = R.agreement(rules_a, llm_a)
+                res.agreement, summ = R.agreement(ml_a, llm_a)
                 res.engine_info["agreement"] = summ
-                final, notes = R.reconcile(rules_a, llm_a)
+                final, notes = R.reconcile(ml_a, llm_a)
             else:
-                final = rules_a
-                notes.append("The language model's answer was not usable, so the files are built from the rules engine alone.")
+                final = ml_a
+                notes.append("The LLM's answer was not usable, so the files are built from the Internal ML model alone.")
                 res.issues.append({"level": "warn", "code": "fallback", "message": notes[-1]})
         res.notes = notes
         if final is None:
             res.status = "blocked_by_checks" if res.issues else "no_analysis"
             return res
 
-        final = _merge_for_files(final, rules_a)
-        issues = C.run_all(final, request, metrics, style, OTHER_BRANDS, knowledge, extra)
-        res.issues += issues
+        final = _merge_for_files(final, ml_a)
+        res.issues += C.run_all(final, request, metrics, style, OTHER_BRANDS, knowledge, extra)
         res.analysis = final
         errors = [i for i in res.issues if i["level"] == "error"]
-        # history for the trained model (kept by the user, not by the server)
-        new_rows = E.history_rows(metrics, request, rules, run_id=hashlib.sha1((inp.brand + str(datetime.now())).encode()).hexdigest()[:8])
-        if history is not None and len(history):
-            allh = pd.concat([history, new_rows], ignore_index=True).drop_duplicates(subset=["brand", "template", "date"], keep="last")
-        else:
-            allh = new_rows
-        res.history_csv = allh.to_csv(index=False).encode("utf-8")
+
+        new_rows = T.rows_from_run(metrics, request, vertical=inp.vertical, cohort_rules_text=inp.cohort_rules)
+        res.history_csv = T.to_csv(T.merge(history, new_rows))
         res.review_notes = review_notes(inp, res, knowledge)
         if errors:
             res.status = "blocked_by_checks"
             say(f"Checks found {len(errors)} error(s); files were not built.")
             return res
 
-        # files
         from .pdf import docx_to_pdf
         from .render_docx import build_docx
         from .render_pptx import build_pptx
@@ -256,30 +247,29 @@ def run_job(inp, log=print, analysis_override=None):
                 except Exception as e:
                     res.issues.append({"level": "warn", "code": "pdf", "message": str(e)})
         if "pptx" in want:
-            tpl_path = None
-            if inp.vi_template_bytes:
-                tpl_path = os.path.join(tmp, "template.pptx")
+            tpl_path, tpl_name = None, ""
+            if inp.template_bytes:
+                tpl_path, tpl_name = os.path.join(tmp, "template.pptx"), "the template you uploaded"
                 with open(tpl_path, "wb") as f:
-                    f.write(inp.vi_template_bytes)
-            else:
-                cand = os.path.join(os.path.dirname(CONFIG), "assets", "vi_template.pptx")
-                tpl_path = cand if os.path.exists(cand) else None
+                    f.write(inp.template_bytes)
+            elif os.path.exists(BUNDLED_TEMPLATE):
+                tpl_path, tpl_name = BUNDLED_TEMPLATE, "the bundled Vi template"
             pp = os.path.join(tmp, f"{base}_RCS_Template_Deck.pptx")
-            build_pptx(metrics, final, request, tpl_path, pp, style, img_dir)
+            try:
+                build_pptx(metrics, final, request, tpl_path, pp, style, img_dir)
+            except ValueError as e:                     # an uploaded file that is not the Vi template
+                res.issues.append({"level": "warn", "code": "template_rejected", "message": f"{e} The deck was built on the bundled template instead."})
+                build_pptx(metrics, final, request, BUNDLED_TEMPLATE if os.path.exists(BUNDLED_TEMPLATE) else None, pp, style, img_dir)
+                tpl_name = "the bundled Vi template"
             res.files[os.path.basename(pp)] = _read(pp)
             lbl = _label(res.files[os.path.basename(pp)])
             if lbl:
                 res.issues.append({"level": "warn", "code": "sensitivity_label_inherited",
-                                   "message": f"The deck carries the template's sensitivity label '{lbl}'. It is left as it is. Relabel it in PowerPoint as your policy requires before it goes outside the company."})
+                                   "message": f"The deck carries {tpl_name}'s sensitivity label '{lbl}'. It is left as it is. Relabel it in PowerPoint as your policy requires before it goes outside the company."})
             if not tpl_path:
-                res.issues.append({"level": "info", "code": "plain_deck", "message": "No Vi template was supplied, so the deck uses a plain design."})
+                res.issues.append({"level": "info", "code": "plain_deck", "message": "No Vi template was found, so the deck uses a plain design."})
         res.status = "built"
     return res
-
-
-def _read(path):
-    with open(path, "rb") as f:
-        return f.read()
 
 
 def _label(pptx_bytes):
@@ -297,16 +287,16 @@ def _label(pptx_bytes):
 
 def review_notes(inp, res, knowledge):
     """Internal file for the reviewers. Never goes to the brand."""
-    L_ = [f"# Review notes (internal, do not send to the brand)", f"- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-          f"- Brand: {inp.brand}   Engine mode: {inp.engine}", f"- Input sheet: {inp.sheet_name} (sha256 {hashlib.sha256(inp.sheet_bytes).hexdigest()[:12]})"]
+    L_ = ["# Review notes (internal, do not send to the brand)", f"- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+          f"- Brand: {inp.brand}   Engine: {ENGINE_LABELS.get(inp.engine, inp.engine)}", f"- Input sheet: {inp.sheet_name} (sha256 {hashlib.sha256(inp.sheet_bytes).hexdigest()[:12]})"]
     if "llm" in res.engine_info:
         e = res.engine_info["llm"]
-        L_.append(f"- Language model: {e['model']} at {e['host']}; {e['calls']} call(s) including corrections")
-    mi = res.engine_info.get("rules", {}).get("model", {})
-    L_.append(f"- Trained model: {mi.get('status', 'none')}. {mi.get('reason', '')}")
-    c = res.engine_info.get("rules", {}).get("concordance", {})
+        L_.append(f"- Open-source LLM: {e['model']} at {e['host']}; images {'sent' if e.get('vision') else 'not sent'}; {e['calls']} call(s) including corrections")
+    mi = res.engine_info.get("ml", {}).get("model", {})
+    L_.append(f"- Internal ML model, text scoring: always on. Trained component: {mi.get('status', 'none')}. {mi.get('reason', '')}")
+    c = res.engine_info.get("ml", {}).get("concordance", {})
     if c:
-        L_.append(f"- Rules engine text-only score vs click rate: {c['concordant']} concordant, {c['discordant']} discordant, {c['tied']} tied pairs (within the same period). Single send dates: directional.")
+        L_.append(f"- Text-only score vs click rate: {c['concordant']} concordant, {c['discordant']} discordant, {c['tied']} tied pairs (within the same period). Single sends: directional.")
     un = unvetted(knowledge)
     if un:
         L_.append(f"- Knowledge pack: guardrails {', '.join(un)} are marked to_be_vetted. Confirm with their owner before relying on them.")
@@ -323,14 +313,8 @@ def review_notes(inp, res, knowledge):
         L_.append("- No issues.")
     for i in res.issues:
         L_.append(f"- [{i['level']}] {i.get('where', '') or i.get('template', '')} {i['message']}")
-    L_.append("\n## What the reviewer should read line by line\n- The content review (works and watch-outs) and the recommendations. The number check confirms numbers exist in the computed results; it cannot confirm they are attached to the right thing.\n- Any statement about how RCS renders on a phone: it must come from the knowledge pack.")
+    L_.append("\n## What the reviewer should read line by line\n- The content review (works and watch-outs) and the recommendations. The number check confirms numbers exist in the computed results; it cannot confirm they are attached to the right thing.\n- Any statement about how RCS renders on a phone: it must come from the knowledge pack.\n- Audience is unknown: brands do not share targeting.")
     return "\n".join(L_)
 
 
-def prepare_brief(inp):
-    """Manual route: the single prompt to paste into Copilot chat (with the screenshots). No model is called."""
-    from . import brief as B
-    metrics = M.run(io.BytesIO(inp.sheet_bytes), brand=inp.brand, templates=[t["template"] for t in inp.templates], filename=inp.sheet_name)
-    with tempfile.TemporaryDirectory() as tmp:
-        request, _ = _brief_request(inp, metrics, tmp)
-    return B.full_brief(request, metrics, load_knowledge())
+ENGINE_LABELS = {"ml": "Internal ML model", "llm": "Open-source LLM", "both": "Both"}

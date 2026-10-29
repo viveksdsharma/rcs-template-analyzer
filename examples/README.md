@@ -1,0 +1,1 @@
+Example output from the Internal ML model on the bundled Axis Bank workbook (9 sends of 4 templates, September 2026), built on the bundled Vi template. Regenerate by uploading data/seed/axis_bank.xlsx in the app.

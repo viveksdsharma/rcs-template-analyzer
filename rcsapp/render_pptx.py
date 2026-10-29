@@ -1,6 +1,8 @@
-"""PowerPoint builder (python-pptx). On the Vi template when one is supplied; on a plain design otherwise.
+"""PowerPoint builder (python-pptx). Built on the Vi template (bundled in assets/, or one uploaded for the run).
+If no template file can be found it falls back to a plain design.
 Flow follows the Axis deck: template in focus -> what might not work -> recommendations, plus period comparison."""
 import os
+import re
 
 from lxml import etree
 from PIL import Image
@@ -14,6 +16,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
 from . import metrics as M
+from .features import iconify
 from .render_docx import YOY_DEC, YOY_ROWS, _change_text
 
 RED, NAVY, PURPLE, TXT, MUTED = "EE2737", "2F3043", "5F004B", "2A2A33", "6B6B76"
@@ -36,6 +39,9 @@ class Deck:
                 self.prs.part.drop_rel(sid.rId)
                 lst.remove(sid)
             self.LAY = {l.name.strip(): l for l in self.prs.slide_layouts}
+            missing = [n for n in ("3_Title Slide 01", "Only Title slide", "1_Thank You") if n not in self.LAY]
+            if missing:
+                raise ValueError(f"This PowerPoint file is not the Vi template: the layouts {missing} are missing. Use the bundled template or upload the right one.")
         else:
             self.prs = Presentation()
             self.prs.slide_width, self.prs.slide_height = Inches(13.333), Inches(7.5)
@@ -131,6 +137,32 @@ def text(s, x, y, w, h, content, size=12, bold=False, color=TXT, align="l", anch
         if bullets or para_bullet:
             _bullet(p)
     return tb
+
+
+def _fits(text_, w, h, sz):
+    import math
+    cpl = max(8, w * 72 / (sz * 0.58))
+    lines = sum(max(1, math.ceil(len(ln) / cpl)) for ln in str(text_).split("\n"))
+    return lines * sz * 1.25 / 72 <= h
+
+
+def fit_size(text_, w, h, hi=12.5, lo=8.5):
+    """Largest font size (pt) at which text is estimated to fit a w x h inch box."""
+    for sz in [hi - 0.5 * i for i in range(int((hi - lo) / 0.5) + 1)]:
+        if _fits(text_, w, h, sz):
+            return sz
+    return lo
+
+
+def fit_text(text_, w, h, hi=12.5, lo=9.0):
+    """(text, size): shrink first; if even the smallest size does not fit, drop trailing lines and point to the report."""
+    if _fits(text_, w, h, lo):
+        return text_, fit_size(text_, w, h, hi, lo)
+    lines = str(text_).split("\n")
+    tail = "\n\u2026 (full text in the report)"
+    while lines and not _fits("\n".join(lines) + tail, w, h, lo):
+        lines.pop()
+    return "\n".join(lines) + tail, lo
 
 
 def panel_text(items, size=12.5):
@@ -265,6 +297,7 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
     tpl = {t["template"]: t for t in metrics["templates"]}
     req_t = {t["template"]: t for t in request["templates"]}
     ana_t = {t["template"]: t for t in analysis["templates"]}
+    multi = len({t["template"] for t in metrics["templates"]}) < len(metrics["templates"])
     SRC = "Source: partner portal template export. * = our calculation from the sheet counts."
     shorts = {x["template"]: x.get("short") for x in (request["templates"] + (request.get("reference_templates") or []))}
     sr = lambda t, k: M.shown_rate(t, k)  # noqa: E731
@@ -289,16 +322,16 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
         source(s, ctx.get("source", "Source: figures as reported by the brand."))
 
     s = D.slide()
-    header(s, "WHAT WE ANALYSED", f"{len(metrics['templates'])} templates" + (f", {len(years)} periods" if len(years) > 1 else ""))
+    header(s, "WHAT WE ANALYSED", f"{len(metrics['templates'])} sends of {len({t['template'] for t in metrics['templates']})} templates" + (f", {len(years)} periods" if len(years) > 1 else ""))
     rows = [["Year", "Template", "Date", "GoogleID", "Messages Submitted", "DeliveryRate", "ReadRate", "P2AResponseRate (click rate)"]]
     for t in metrics["templates"]:
         rows.append([str(t["year"]), t["template"], M.nice_date(t["date"]).rsplit(" ", 1)[0], t["google_id_short"], M.fmt_int(t["counts"]["submitted"]),
                      M.fmt_pct(sr(t, "DeliveryRate")), M.fmt_pct(sr(t, "ReadRate")), (M.fmt_pct(sr(t, "P2AResponseRate")), {"bold": True})])
-    rh = min(0.42, 4.5 / len(rows))
+    rh = min(0.4, 3.9 / len(rows))
     table(s, 0.5, 1.5, 12.3, [0.7, 3.2, 1.0, 1.2, 1.7, 1.4, 1.2, 1.9], rows, size=12 if len(rows) <= 9 else 10, rowh=rh, align=["l", "l", "l", "l", "r", "r", "r", "r"])
     text(s, 0.5, 1.5 + rh * len(rows) + 0.2, 12.3, 1.2, [
         [("Column names are the sheet's own.  ", {"bold": True, "color": NAVY}), ("DeliveryRate = delivered \u00F7 sent. ReadRate = read \u00F7 delivered. P2AResponseRate = click rate (responses \u00F7 read).", {})],
-        [("Each template is a single send date.  ", {"bold": True, "color": NAVY}), ("Audience, day of week and frequency cannot be separated from the creative, so findings are directional.", {})]], size=12, space_after=5)
+        [("Each send has its own audience and timing.  " if multi else "Each template is a single send date.  ", {"bold": True, "color": NAVY}), ("Audience, day of week and frequency cannot be separated from the creative, so findings are directional.", {})]], size=11, space_after=4)
     source(s, SRC)
 
     s = D.slide()
@@ -309,7 +342,7 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
         g = metrics["groups"]["year"][str(y)]
         c = g["counts"]
         sub = c["submitted"]
-        ser.append((f"{ylab(y)} ({g['n_templates']} templates)", [round(100 * c["failed"] / sub, 1), round(100 * c["sent"] / sub, 1), round(100 * c["delivered"] / sub, 1), round(100 * c["read"] / sub, 1)]))
+        ser.append((f"{ylab(y)} ({g['n_templates']} sends)", [round(100 * c["failed"] / sub, 1), round(100 * c["sent"] / sub, 1), round(100 * c["delivered"] / sub, 1), round(100 * c["read"] / sub, 1)]))
     bar_chart(s, 0.4, 1.8, 7.4, 4.6, ["Failed pre-send", "Sent", "Delivered", "Read"], ser, colors=[PURPLE, RED], maxv=70, fmt='0.0"%"', legend=len(ser) > 1, font=12, gap=70)
     rect(s, 8.1, 1.45, 4.7, 5.0, PANEL)
     text(s, 8.35, 1.6, 4.3, 4.8, panel_text(dk.get("funnel_panel", [])), size=12.5, space_after=7)
@@ -322,7 +355,7 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
         a, b = yoy["from_year"], yoy["to_year"]
         ga, gb = metrics["groups"]["year"][str(a)], metrics["groups"]["year"][str(b)]
         text(s, 0.5, 1.45, 5.6, 0.3, "Click rate (P2AResponseRate)", size=14, bold=True, color=NAVY)
-        bar_chart(s, 0.4, 1.8, 5.5, 4.0, [f"{ylab(a)}\n({ga['n_templates']} templates)", f"{ylab(b)}\n({gb['n_templates']} templates)"],
+        bar_chart(s, 0.4, 1.8, 5.5, 4.0, [f"{ylab(a)}\n({ga['n_templates']} sends)", f"{ylab(b)}\n({gb['n_templates']} sends)"],
                   [("Click rate", [round(ga["rates"]["P2AResponseRate"], 2), round(gb["rates"]["P2AResponseRate"], 2)])], point_colors=[PURPLE, RED],
                   maxv=max(ga["rates"]["P2AResponseRate"], gb["rates"]["P2AResponseRate"]) * 1.25, fmt='0.00"%"', font=12, gap=55, label_size=16)
         rows = [["Metric", ylab(a), ylab(b), "Change"]]
@@ -347,7 +380,7 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
     text(s, 0.5, 1.45, 7.4, 0.3, "Click rate (P2AResponseRate)", size=14, bold=True, color=NAVY)
     bar_chart(s, 0.4, 1.8, 7.7, 4.45, [f"{shorts.get(t['template']) or t['template']} ({M.nice_date(t['date']) if len(years) > 1 else M.nice_date(t['date']).rsplit(' ', 1)[0]})" for t in ranked],
               [("Click rate", [round(sr(t, "P2AResponseRate"), 2) for t in ranked])], point_colors=[pal[t["year"]] for t in ranked], horizontal=True,
-              maxv=max(sr(t, "P2AResponseRate") for t in ranked) * 1.18, fmt='0.00"%"', font=11, gap=40, label_size=12)
+              maxv=max(sr(t, "P2AResponseRate") for t in ranked) * 1.18, fmt='0.00"%"', font=10 if len(ranked) > 8 else 11, gap=40, label_size=11)
     if len(years) > 1:
         text(s, 0.5, 6.3, 7.5, 0.3, [[(f"{ylab(y)}   ", {"bold": True, "color": pal[y]}) for y in sorted(years)]], size=11, color=MUTED)
     rect(s, 8.4, 1.45, 4.4, 5.0, PANEL)
@@ -374,12 +407,12 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
             text(s, x + 0.2, y0 + 0.85, 2.0, 0.55, M.fmt_pct(sr(t, "P2AResponseRate")), size=28, bold=True, color=RED, anchor="m")
             text(s, x + 2.15, y0 + 0.87, cw - 2.3, 0.55, ["click rate", "ReadRate " + M.fmt_pct(sr(t, "ReadRate")), "DeliveryRate " + M.fmt_pct(sr(t, "DeliveryRate"))], size=9.5, color=MUTED, anchor="m")
             rect(s, x + 0.2, y0 + 1.5, cw - 0.4, 0.015, "BFBFC6")
-            paras = [[("Card Title", {"bold": True, "color": MUTED, "size": 10.5})], [(c.get("title", ""), {"bold": True, "color": NAVY, "size": 13})],
+            paras = [[("Card Title", {"bold": True, "color": MUTED, "size": 10.5})], [(iconify(c.get("title", "")), {"bold": True, "color": NAVY, "size": 13})],
                      [("Card Description", {"bold": True, "color": MUTED, "size": 10.5})]]
             desc = c.get("description", "")
             for line in (desc if isinstance(desc, list) else [desc]):
-                paras.append([(line, {"size": 11})])
-            paras.append([("Button  ", {"bold": True, "color": MUTED, "size": 10.5}), (c.get("button", ""), {"bold": True, "color": RED, "size": 12})])
+                paras.append([(iconify(line), {"size": 11})])
+            paras.append([("Button  ", {"bold": True, "color": MUTED, "size": 10.5}), (iconify(c.get("button", "")), {"bold": True, "color": RED, "size": 12})])
             if note.get("bullets"):
                 paras.append([("What stands out", {"bold": True, "color": MUTED, "size": 10.5})])
                 for bb in note["bullets"]:
@@ -396,20 +429,20 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
         rows.append([f"{h['id']}  {h['hypothesis']}", h["evidence"], (h["status"], {"fill": f, "color": c, "bold": True})])
     rh = min(0.68, 4.8 / len(rows))
     table(s, 0.5, 1.5, 12.3, [3.3, 6.5, 2.5], rows, size=11 if len(rows) <= 7 else 10, rowh=rh)
-    text(s, 0.5, 6.4, 12.3, 0.4, dk.get("hypotheses_footnote", "Each template is a single send date. Audience, send time and post-click data (visits, orders) are not yet available."), size=12, italic=True, color=MUTED)
+    text(s, 0.5, 6.4, 12.3, 0.4, dk.get("hypotheses_footnote", "Audience, send time and post-click data (visits, orders) are not available, so findings are directional."), size=12, italic=True, color=MUTED)
     source(s, SRC)
 
-    def focus(n, t, a, rq):
+    def focus(n, t, a, rq, st):
         s = D.slide()
         header(s, f"TEMPLATE {n:02d}", f"Template in Focus  |  {rq.get('label') or t['template']}",
-               sub=f"Template name: {t['template']}   |   Sent {M.nice_date(t['date'])}   |   GoogleID {t['google_id_short']}")
+               sub=f"Template name: {t['template']}   |   {'Sent ' if st['sends'] == 1 else ''}{st['when']}   |   GoogleID {t['google_id_short']}")
         img = os.path.join(image_dir, rq.get("image", "") or "")
         ph = 0
         if rq.get("image") and os.path.exists(img):
             _, ph = picture(s, img, 0.6, 1.75, 7.6, 3.1)
         my = 1.75 + ph + 0.2
         mh = 6.5 - my
-        for i, (big, lab) in enumerate([(M.fmt_pct(sr(t, "DeliveryRate")), "DeliveryRate"), (M.fmt_pct(sr(t, "ReadRate")), "ReadRate"), (M.fmt_pct(sr(t, "P2AResponseRate")), "P2AResponseRate (click rate)")]):
+        for i, (big, lab) in enumerate([(M.fmt_pct(st["dr"]), "DeliveryRate"), (M.fmt_pct(st["rr"]), "ReadRate"), (M.fmt_pct(st["cr"]), "P2AResponseRate (click rate)")]):
             mx = 0.6 + i * 2.58
             rect(s, mx, my, 2.44, mh, PANEL)
             rect(s, mx, my, 0.06, mh, RED)
@@ -417,29 +450,33 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
             text(s, mx + 0.2, my + mh * 0.58, 2.2, mh * 0.4, lab, size=10.5, color=MUTED)
         c = rq.get("card", {})
         desc = c.get("description", "")
-        desc = desc if isinstance(desc, str) else "\n".join(desc)
+        desc = iconify(desc if isinstance(desc, str) else "\n".join(desc))
+        desc = re.sub(r"\n{2,}", "\n", desc)
+        title_t = iconify(c.get("title", ""))
+        desc, dsz = fit_text(desc, 3.8, 1.9)
         rect(s, 8.5, 1.75, 4.3, 4.75, PANEL)
         text(s, 8.75, 1.92, 3.8, 0.3, "CURRENT LIVE TEXT", size=14, bold=True, color=RED)
         text(s, 8.75, 2.3, 3.8, 0.25, "Card Title", size=12, bold=True, color=MUTED)
-        text(s, 8.75, 2.55, 3.8, 0.75, c.get("title", ""), size=14, bold=True, color=NAVY)
+        text(s, 8.75, 2.55, 3.8, 0.75, title_t, size=14 if len(title_t) < 60 else 12, bold=True, color=NAVY)
         text(s, 8.75, 3.35, 3.8, 0.25, "Card Description", size=12, bold=True, color=MUTED)
-        text(s, 8.75, 3.6, 3.8, 2.0, desc, size=12.5 if len(desc) < 260 else 11, color=TXT)
+        text(s, 8.75, 3.6, 3.8, 2.0, desc, size=dsz, color=TXT)
         text(s, 8.75, 5.65, 3.8, 0.25, "CTA", size=12, bold=True, color=MUTED)
-        text(s, 8.75, 5.9, 3.8, 0.3, c.get("button", ""), size=12, bold=True, color=RED)
+        text(s, 8.75, 5.9, 3.8, 0.3, iconify(c.get("button", "")), size=12, bold=True, color=RED)
         source(s, "Source: partner portal template export; creative as supplied. Emojis may appear as placeholders.")
         notes(s, a.get("speaker_note", ""))
 
     def six(n, t, a, rq):
         s = D.slide()
-        works, watch = a.get("works", []), a.get("watch_outs", [])
-        nw = min(len(works), 3)
-        items = [(x, NAVY) for x in works[:nw]] + [(x, RED) for x in watch[:6 - nw]]
-        header(s, f"TEMPLATE {n:02d}  \u00B7  {rq.get('label') or t['template']}", "What Works and What to Watch" if works else "What Might Not Work in the Current Template")
-        pos = [(0.5, 1.5), (0.5, 3.1), (0.5, 4.7), (6.85, 1.5), (6.85, 3.1), (6.85, 4.7)]
-        for i, ((x, y), (it, col)) in enumerate(zip(pos, items)):
-            rect(s, x, y + 0.03, 0.06, 1.35, col)
-            text(s, x + 0.22, y, 5.7, 0.4, f"{i + 1}.  {it['h']}", size=16, bold=True, color=NAVY)
-            text(s, x + 0.22, y + 0.42, 5.7, 1.0, it["b"], size=13.5 if len(it["b"]) < 170 else 12, color=TXT)
+        works = (a.get("works") or [])[:3]
+        watch = (a.get("watch_outs") or [])[:3] or [{"h": "No text flags", "b": "None of the text checks fired for this template."}]
+        header(s, f"TEMPLATE {n:02d}  \u00B7  {rq.get('label') or t['template']}", "What Works and What to Watch")
+        ys = [1.5, 3.1, 4.7]
+        for x, items, color in ((0.5, works, NAVY), (6.85, watch, RED)):
+            for i, it in enumerate(items):
+                y = ys[i]
+                rect(s, x, y + 0.03, 0.06, 1.35, color)
+                text(s, x + 0.22, y, 5.7, 0.4, f"{i + 1}.  {it['h']}", size=16, bold=True, color=NAVY)
+                text(s, x + 0.22, y + 0.42, 5.7, 1.0, it["b"], size=13.5 if len(it["b"]) < 170 else 12, color=TXT)
         rect(s, 0.5, 6.2, 12.3, 0.4, PANEL)
         text(s, 0.7, 6.2, 11.9, 0.4, a.get("strip") or f"Click rate {M.fmt_pct(sr(t, 'P2AResponseRate'))}", size=12, color=NAVY, bold=True, anchor="m")
 
@@ -456,15 +493,16 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
             rect(s, x, 1.5, w, 0.5, fill)
             text(s, x + 0.3, 1.5, w - 0.5, 0.5, v["name"], size=16, bold=True, color=WHITE, anchor="m")
             text(s, x + 0.3, 2.2, w - 0.6, 0.25, "Card Title", size=12, bold=True, color=MUTED)
-            text(s, x + 0.3, 2.45, w - 0.6, 0.9, v["title"], size=20, bold=True, color=NAVY)
+            text(s, x + 0.3, 2.45, w - 0.6, 0.9, iconify(v["title"]), size=20 if len(v["title"]) < 45 else 16, bold=True, color=NAVY)
             text(s, x + 0.3, 3.4, w - 0.6, 0.25, "Card Description", size=12, bold=True, color=MUTED)
-            text(s, x + 0.3, 3.65, w - 0.6, 1.5, v["description"] if isinstance(v["description"], list) else [v["description"]], size=15, color=TXT, space_after=6)
+            text(s, x + 0.3, 3.65, w - 0.6, 1.5, [iconify(d_) for d_ in (v["description"] if isinstance(v["description"], list) else [v["description"]])], size=14, color=TXT, space_after=6)
             text(s, x + 0.3, 5.45, w - 0.6, 0.25, "Why test it", size=12, bold=True, color=MUTED)
             text(s, x + 0.3, 5.7, w - 0.6, 0.8, v["why"], size=13, color=TXT)
 
-    for n, t in enumerate([t for t in metrics["templates"] if t["year"] == cur], 1):
-        a, rq = ana_t[t["template"]], req_t[t["template"]]
-        focus(n, t, a, rq)
+    for n, (nm, rows_) in enumerate(M.distinct(metrics, cur).items(), 1):
+        t, st = rows_[0], M.card_stats(rows_)
+        a, rq = ana_t[nm], req_t[nm]
+        focus(n, t, a, rq, st)
         six(n, t, a, rq)
         variations(n, t, a, rq)
 
@@ -479,7 +517,7 @@ def build_pptx(metrics, analysis, request, template_path, out_path, style, image
         rect(s, x + 0.25, y + 0.2, 0.5, 0.5, NAVY, shape=MSO_SHAPE.OVAL)
         text(s, x + 0.25, y + 0.2, 0.5, 0.5, str(i + 1), size=16, bold=True, color=WHITE, align="c", anchor="m")
         text(s, x + 0.9, y + 0.2, cw - 1.1, 0.7, r["h"], size=14, bold=True, color=NAVY, anchor="m")
-        text(s, x + 0.25, y + 1.0, cw - 0.45, 1.3, r["b"], size=13 if len(r["b"]) > 120 else 13.5, color=TXT)
+        text(s, x + 0.25, y + 1.0, cw - 0.45, 1.3, r["b"], size=12 if len(r["b"]) > 120 else 13.5, color=TXT)
     source(s, "Source: template review; partner portal template export.")
 
     s = D.slide()

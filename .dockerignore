@@ -1,5 +1,5 @@
 .git
 __pycache__
 .streamlit/secrets.toml
-*.xlsx
 history*.csv
+training*.csv

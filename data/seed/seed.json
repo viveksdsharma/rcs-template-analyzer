@@ -1,0 +1,10 @@
+{
+  "_readme": "Workbooks loaded into the training history every time the app starts. Add a brand: drop its workbook in this folder and add a line here. Cohort rules label templates that went to clearly different lists (only when you know it); 'offline=offline' gives every template whose name contains 'offline' the cohort 'offline'.",
+  "files": [
+    {"file": "nykaa.xlsx", "brand": "Nykaa", "vertical": "E-commerce"},
+    {"file": "bigbasket.xlsx", "brand": "bigbasket", "vertical": "E-commerce"},
+    {"file": "victorias_secret.xlsx", "brand": "Victoria's Secret", "vertical": "Retail", "cohort_rules": "offline=offline\noff_pink=offline\nonline=online"},
+    {"file": "myntra.xlsx", "brand": "Myntra", "vertical": "E-commerce"},
+    {"file": "axis_bank.xlsx", "brand": "Axis Bank", "vertical": "BFSI-Banking"}
+  ]
+}

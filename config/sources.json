@@ -1,5 +1,5 @@
 {
-  "_readme": "Maps the column names of a data source to the app's canonical names. To support another export format add a profile. Matching ignores case and extra spaces. The app stops and lists any required column it cannot find.",
+  "_readme": "Maps the column names of a data source to the app's canonical names. Matching ignores case, spaces and underscores. To support another export format add a profile. The app stops and lists any required column it cannot find.",
   "valuefirst_portal": {
     "required": {
       "date": ["Date"],
@@ -15,13 +15,22 @@
       "expired": ["Messages Expired"],
       "delivery_rate_sheet": ["Messages DeliveryRate", "DeliveryRate"],
       "read_rate_sheet": ["ReadRate"],
-      "p2a_responses": ["P2AResponses"],
-      "p2a_rate_sheet": ["P2AResponseRate"]
+      "p2a_responses": ["P2AResponses", "P2AResponses=clicks"],
+      "p2a_rate_sheet": ["P2AResponseRate", "P2AResponseRate=clickrate"]
     },
     "optional": {
       "aggregator": ["Aggregator"],
       "agent_name": ["AgentName"],
-      "agent_id": ["AgentID"]
+      "agent_id": ["AgentID"],
+      "title": ["template title", "card title", "title"],
+      "body": ["template body", "card description", "description", "body"],
+      "cta": ["CTA", "CTA Phrase", "button", "button label"],
+      "cta_url": ["CTA URL"],
+      "category": ["vertical", "product category", "category"],
+      "exact_text": ["exact text"],
+      "cohort": ["cohort"],
+      "exclude": ["exclude"],
+      "exclude_reason": ["exclude reason"]
     }
   }
 }

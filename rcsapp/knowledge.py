@@ -1,4 +1,4 @@
-"""Loads the knowledge pack and the rules, and turns them into prompt text."""
+"""Loads the knowledge pack and the scoring checks, and turns them into prompt text."""
 import json
 import os
 

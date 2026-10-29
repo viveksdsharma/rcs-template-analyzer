@@ -6,7 +6,7 @@ Rules:
   2. P2AResponseRate is the CLICK RATE (P2AResponses / Messages Read).
   3. One brand per run.
   4. A missing required column stops the run and is listed. Nothing is guessed.
-  5. Stray rows (loose ratios, bare year cells, blanks) are ignored and reported.
+  5. Stray rows (loose ratios, bare year cells, blanks) and the fused page footer are ignored and reported.
 """
 import io
 import json
@@ -20,6 +20,7 @@ from . import CONFIG
 
 CONFIG_PATH = os.path.join(CONFIG, "sources.json")
 COUNT_COLS = ["submitted", "sent", "delivered", "read", "failed", "expired", "p2a_responses"]
+FOOTER_RE = re.compile(r"&8C\d\s*[\u2013\u2014-]\s*Vodafone Idea\s*\w*", re.I)
 
 DEFINITIONS = [
     ("DeliveryRate", "Messages Delivered / Messages Sent", "Platform delivery once a message has left the platform", "sheet"),
@@ -46,7 +47,15 @@ class MultipleBrands(PipelineError):
 
 
 def _norm(s):
-    return re.sub(r"\s+", " ", str(s)).strip().lower()
+    return re.sub(r"[\s_]+", "", str(s).lower())
+
+
+def clean_cell(v):
+    """Strip the fused page footer ('&8C1 - Vodafone Idea External') some exports leave inside the last cell."""
+    if isinstance(v, str):
+        v2 = FOOTER_RE.sub("", v).strip()
+        return v2 if v2 else None
+    return v
 
 
 def parse_pct(x):
@@ -93,12 +102,11 @@ def read_table(source, filename=None, sheet_name=0):
     return pd.read_excel(source, sheet_name=sheet_name, header=0, dtype=object)
 
 
-def load_sheet(source, profile="valuefirst_portal", brand=None, templates=None, filename=None, allow_multi=False):
-    """Return (clean DataFrame, issues). allow_multi=True keeps every brand (used by the UI to list brands)."""
+def canonicalise(raw, profile="valuefirst_portal"):
+    """Map the sheet's columns to canonical names, clean the cells, keep valid rows.
+    Optional text columns (title, body, cta, ...) are passed through when present."""
     prof = load_profile(profile)
-    raw = read_table(source, filename=filename)
     by_norm = {_norm(c): c for c in raw.columns}
-
     mapping, missing = {}, []
     for canon, aliases in prof["required"].items():
         hit = next((by_norm[_norm(a)] for a in aliases if _norm(a) in by_norm), None)
@@ -109,11 +117,11 @@ def load_sheet(source, profile="valuefirst_portal", brand=None, templates=None, 
     if missing:
         raise MissingColumns("Required columns not found in the sheet: " + "; ".join(missing) + f". Columns present: {list(raw.columns)}")
     for canon, aliases in prof.get("optional", {}).items():
-        hit = next((by_norm[_norm(a)] for a in aliases if _norm(a) in by_norm), None)
+        hit = next((by_norm[_norm(a)] for a in aliases if _norm(a) in by_norm and by_norm[_norm(a)] not in mapping.values()), None)
         if hit is not None:
             mapping[canon] = hit
 
-    df = pd.DataFrame({canon: raw[col] for canon, col in mapping.items()})
+    df = pd.DataFrame({canon: raw[col] for canon, col in mapping.items()}).map(clean_cell)
     issues = []
     df["_date"] = df["date"].map(_parse_date)
     for c in COUNT_COLS:
@@ -122,18 +130,26 @@ def load_sheet(source, profile="valuefirst_portal", brand=None, templates=None, 
     dropped = int((~valid & df.notna().any(axis=1)).sum())
     if dropped:
         issues.append({"level": "info", "code": "stray_rows_ignored",
-                       "message": f"{dropped} row(s) ignored: no valid date, template or Messages Submitted (stray ratios, year markers or notes)."})
+                       "message": f"{dropped} row(s) ignored: no valid date, template or Messages Submitted (stray ratios, year markers, notes or a page footer)."})
     df = df[valid].copy()
     if df.empty:
         raise PipelineError("No valid data rows found (a row needs a date, a template name and Messages Submitted).")
-
     df["date"] = df["_date"]
     df = df.drop(columns=["_date"])
     df["year"] = df["date"].dt.year.astype(int)
     for c in COUNT_COLS:
         df[c] = df[c].astype(float)
     df["template"] = df["template"].astype(str).str.strip()
+    df["delivery_rate_sheet"] = df["delivery_rate_sheet"].map(parse_pct)
+    df["read_rate_sheet"] = df["read_rate_sheet"].map(parse_pct)
+    df["p2a_rate_sheet"] = df["p2a_rate_sheet"].map(parse_pct)
+    return df, issues
 
+
+def load_sheet(source, profile="valuefirst_portal", brand=None, templates=None, filename=None, allow_multi=False):
+    """Return (clean DataFrame, issues). allow_multi=True keeps every brand (used by the UI to list brands)."""
+    raw = read_table(source, filename=filename)
+    df, issues = canonicalise(raw, profile)
     brands = sorted(df["brand"].dropna().astype(str).unique())
     if not allow_multi:
         if brand:
@@ -151,10 +167,6 @@ def load_sheet(source, profile="valuefirst_portal", brand=None, templates=None, 
         if missing_t:
             raise PipelineError(f"Templates not found in the sheet for this brand: {missing_t}")
         df = df[df["template"].isin(want)].copy()
-
-    df["delivery_rate_sheet"] = df["delivery_rate_sheet"].map(parse_pct)
-    df["read_rate_sheet"] = df["read_rate_sheet"].map(parse_pct)
-    df["p2a_rate_sheet"] = df["p2a_rate_sheet"].map(parse_pct)
     return df.sort_values("date").reset_index(drop=True), issues
 
 
@@ -192,6 +204,9 @@ def check_rows(df, tol_pts=0.011, recon_tol=0.002):
         if r["delivered"] > r["sent"] or r["sent"] > r["submitted"] or r["read"] > r["delivered"]:
             issues.append({"level": "error", "code": "funnel_order", "template": name, "date": d,
                            "message": "Counts break the funnel order (read <= delivered <= sent <= submitted)."})
+        if r["p2a_responses"] > r["read"]:
+            issues.append({"level": "error", "code": "clicks_above_reads", "template": name, "date": d,
+                           "message": "P2AResponses (clicks) are higher than Messages Read."})
         gap_f = abs(r["failed"] - (r["submitted"] - r["sent"]))
         if r["submitted"] and gap_f / r["submitted"] > recon_tol:
             issues.append({"level": "warn", "code": "failed_not_submitted_minus_sent", "template": name, "date": d,
@@ -212,8 +227,7 @@ def check_rows(df, tol_pts=0.011, recon_tol=0.002):
 
 def short_agent_id(google_id):
     s = re.sub(r"_agent$", "", str(google_id))
-    parts = s.split("_", 1)
-    return parts[1] if len(parts) == 2 else s
+    return s.rsplit("_", 1)[-1] if "_" in s else s
 
 
 def analyse(df):
@@ -274,7 +288,6 @@ def run(source, brand=None, templates=None, profile="valuefirst_portal", filenam
     return result
 
 
-# ---------------------------------------------------------------- display helpers shared by the renderers
 def fmt_pct(v, d=2):
     return "n/a" if v is None else f"{v:.{d}f}%"
 
@@ -294,3 +307,25 @@ def shown_rate(t, key):
 def nice_date(iso):
     d = datetime.strptime(iso, "%Y-%m-%d")
     return f"{d.day} {d.strftime('%b %Y')}"
+
+
+def distinct(metrics, year):
+    """{template: [rows]} for one period, in first-send order. A template sent several times has several rows."""
+    out = {}
+    for t in metrics["templates"]:
+        if t["year"] == year:
+            out.setdefault(t["template"], []).append(t)
+    return out
+
+
+def card_stats(rows):
+    """What a template card shows. One send: the sheet's own values. Several sends: pooled from the summed counts."""
+    if len(rows) == 1:
+        t = rows[0]
+        r = t["rates"]
+        return {"dr": shown_rate(t, "DeliveryRate"), "rr": shown_rate(t, "ReadRate"), "cr": shown_rate(t, "P2AResponseRate"), "cr_pooled": r["P2AResponseRate"],
+                "sends": 1, "when": nice_date(t["date"]), "reads": t["counts"]["read"], "clicks": t["counts"]["p2a_responses"]}
+    c = {k: sum(t["counts"][k] for t in rows) for k in COUNT_COLS}
+    r = rates_from_counts(c)
+    return {"dr": r["DeliveryRate"], "rr": r["ReadRate"], "cr": r["P2AResponseRate"], "cr_pooled": r["P2AResponseRate"], "sends": len(rows),
+            "when": f"{len(rows)} sends, {nice_date(rows[0]['date']).rsplit(' ', 1)[0]} to {nice_date(rows[-1]['date']).rsplit(' ', 1)[0]}", "reads": c["read"], "clicks": c["p2a_responses"]}

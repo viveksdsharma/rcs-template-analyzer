@@ -3,10 +3,9 @@ Two engines will not give word-for-word identical output, and pretending otherwi
 They share one schema and the same checks, and this module shows where they differ.
 """
 SEV = {"Low": 0, "Medium": 1, "High": 2}
-INV = {v: k for k, v in SEV.items()}
 
 
-def agreement(a, b, name_a="Data-driven", name_b="Language model"):
+def agreement(a, b, name_a="Internal ML model", name_b="Open-source LLM"):
     """a, b: analyses. Returns a table (list of dicts) and a summary."""
     ta = {t["template"]: t for t in a.get("templates", [])}
     tb = {t["template"]: t for t in b.get("templates", [])}
@@ -17,8 +16,7 @@ def agreement(a, b, name_a="Data-driven", name_b="Language model"):
         ra, rb = ta[name]["content_risk"], tb[name]["content_risk"]
         same = ra == rb
         agree += same
-        rows.append({"template": name, name_a: ra, name_b: rb, "agree": same,
-                     "gap": abs(SEV[ra] - SEV[rb])})
+        rows.append({"template": name, name_a: ra, name_b: rb, "agree": same, "gap": abs(SEV[ra] - SEV[rb])})
     return rows, {"templates": len(rows), "agree": agree, "disagree": len(rows) - agree}
 
 
@@ -34,11 +32,10 @@ def reconcile(ml, llm):
         if not m:
             continue
         if SEV[m["content_risk"]] > SEV[t["content_risk"]]:
-            notes.append(f"{t['template']}: rules engine says {m['content_risk']}, language model said {t['content_risk']}; the higher rating is used. Reviewer to confirm.")
+            notes.append(f"{t['template']}: Internal ML model says {m['content_risk']}, the LLM said {t['content_risk']}; the higher rating is used. Reviewer to confirm.")
             t["content_risk"] = m["content_risk"]
         elif SEV[m["content_risk"]] < SEV[t["content_risk"]]:
-            notes.append(f"{t['template']}: rules engine says {m['content_risk']}, language model said {t['content_risk']}; the language model's rating is kept (the more cautious one).")
-    # deterministic parts come from code in both cases
+            notes.append(f"{t['template']}: Internal ML model says {m['content_risk']}, the LLM said {t['content_risk']}; the LLM's rating is kept (the more cautious one).")
     for key in ("feature_matrix", "reference_templates"):
         if key in ml and key not in final:
             final[key] = ml[key]

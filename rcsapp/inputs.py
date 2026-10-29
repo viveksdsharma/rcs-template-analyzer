@@ -1,4 +1,4 @@
-"""Parsing the things people upload: card-text spreadsheets (as partners send them) and screenshots (single files or a zip)."""
+"""Parsing the things people upload: card-text spreadsheets (as partners send them) and screenshots."""
 import io
 import os
 import re
@@ -15,13 +15,13 @@ def _norm(s):
 
 
 def parse_template_content(data, filename="content.xlsx"):
-    """Partners (for example Tanla) send a sheet with Template Name, Card Title, Card Description, CTA Phrase, CTA Type."""
+    """Partners send a sheet with Template Name, Card Title, Card Description, CTA Phrase, CTA Type."""
     bio = io.BytesIO(data)
     df = pd.read_csv(bio, dtype=object) if filename.lower().endswith(".csv") else pd.read_excel(bio, dtype=object)
     cols = {c: _norm(c) for c in df.columns}
     pick = {}
-    for key, tests in (("template", ("templatename", "template", "templateid")), ("title", ("cardtitle", "title")),
-                       ("description", ("carddescription", "description", "body")), ("button", ("ctaphrase", "button", "cta", "ctalabel"))):
+    for key, tests in (("template", ("templatename", "template", "templateid")), ("title", ("cardtitle", "title", "templatetitle")),
+                       ("description", ("carddescription", "description", "body", "templatebody")), ("button", ("ctaphrase", "button", "cta", "ctalabel"))):
         for c, n in cols.items():
             if n in tests and key not in pick:
                 pick[key] = c
@@ -80,8 +80,9 @@ def safe_name(s):
 
 
 def save_image(data, out_dir, stem, max_w=1200):
-    """Normalise to an RGB JPEG of sensible size. Returns the file name."""
+    """Normalise to an RGB JPEG of sensible size. Raises if the file is not a readable image."""
     im = Image.open(io.BytesIO(data))
+    im.load()
     if im.mode in ("RGBA", "LA", "P"):
         bg = Image.new("RGB", im.size, "white")
         im = im.convert("RGBA")

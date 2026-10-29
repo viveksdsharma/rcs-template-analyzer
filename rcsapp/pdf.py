@@ -57,5 +57,5 @@ def docx_to_pdf(docx_path, pdf_path, soffice_cmd=None):
             return "libreoffice"
         errors.append(f"LibreOffice: {r.stderr.strip()[:200]}")
     else:
-        errors.append("LibreOffice was not found")
+        errors.append("LibreOffice was not found (on a Mac: brew install --cask libreoffice)")
     raise RuntimeError("Could not create the PDF. " + " | ".join(errors))

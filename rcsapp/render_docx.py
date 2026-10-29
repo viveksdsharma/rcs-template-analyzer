@@ -9,6 +9,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from . import metrics as M
+from .features import iconify
 
 FILL = {"green": "E6F4EA", "amber": "FFF4D6", "red": "FDE9E7", "grey": "F2F2F2"}
 LINE = "BFBFBF"
@@ -306,7 +307,7 @@ def build_docx(metrics, analysis, request, out_path, style, image_dir):
         D.p(f"**{ylabel(y)}**", keep=True, after=2)
         rows = [[t["template"], M.nice_date(t["date"]).rsplit(" ", 1)[0], t["google_id_short"]] + [M.fmt_int(t["counts"][k]) for k in cnt] for t in ts]
         tot = metrics["groups"]["year"][str(y)]["counts"]
-        rows.append([{"t": f"**Total ({len(ts)} templates)**", "fill": "grey"}, {"t": "", "fill": "grey"}, {"t": "", "fill": "grey"}] + [{"t": f"**{M.fmt_int(tot[k])}**", "fill": "grey"} for k in cnt])
+        rows.append([{"t": f"**Total ({len(ts)} sends)**", "fill": "grey"}, {"t": "", "fill": "grey"}, {"t": "", "fill": "grey"}] + [{"t": f"**{M.fmt_int(tot[k])}**", "fill": "grey"} for k in cnt])
         add_table(D.d, w31, hdr31, rows, size=7, hsize=6.5, header_fill=hf)
         D.gap()
     D.note('GoogleID is shown without the brand prefix and the "_agent" suffix.')
@@ -335,7 +336,7 @@ def build_docx(metrics, analysis, request, out_path, style, image_dir):
     rows = []
     for key, g in sorted(metrics["groups"]["year|google_id"].items(), key=lambda kv: kv[0].split("|")[0], reverse=True):
         y, gid = key.split("|", 1)
-        names = ", ".join(t["template"] for t in metrics["templates"] if str(t["year"]) == y and t["google_id"] == gid)
+        names = ", ".join(dict.fromkeys(t["template"] for t in metrics["templates"] if str(t["year"]) == y and t["google_id"] == gid))
         r = g["rates"]
         rows.append([M.short_agent_id(gid), y, names, M.fmt_int(g["counts"]["submitted"]), M.fmt_pct(r["pre_send_failure_rate"], 1), M.fmt_pct(r["DeliveryRate"]), M.fmt_pct(r["ReadRate"]), M.fmt_pct(r["P2AResponseRate"])])
     add_table(D.d, [1000, 600, 2500, 1150, 1100, 1050, 850, 1496], ["GoogleID", "Year", "Templates", "Messages Submitted", "Pre-send failure rate*", "DeliveryRate", "ReadRate", "P2AResponseRate (click rate)"], rows, size=7.5, header_fill=hf)
@@ -360,7 +361,7 @@ def build_docx(metrics, analysis, request, out_path, style, image_dir):
             d_ = YOY_DEC.get(key, 2)
             rows.append([{"t": f"**{label}**" if hot else label, "fill": f}, {"t": M.fmt_pct(m["from"], d_), "fill": f}, {"t": M.fmt_pct(m["to"], d_), "fill": f},
                          {"t": f"**{_change_text(key, m)}**" if hot else _change_text(key, m), "fill": f}])
-        add_table(D.d, [3200, 2000, 2000, 2546], ["Metric", f"{ylabel(yoy['from_year'])} ({ya['n_templates']} templates)", f"{ylabel(yoy['to_year'])} ({yb['n_templates']} templates)", "Change"], rows, size=8.5, header_fill=hf)
+        add_table(D.d, [3200, 2000, 2000, 2546], ["Metric", f"{ylabel(yoy['from_year'])} ({ya['n_templates']} sends)", f"{ylabel(yoy['to_year'])} ({yb['n_templates']} sends)", "Change"], rows, size=8.5, header_fill=hf)
         D.gap()
         if analysis.get("yoy_commentary"):
             D.numbered(_hb(analysis["yoy_commentary"]))
@@ -368,20 +369,23 @@ def build_docx(metrics, analysis, request, out_path, style, image_dir):
     sec4 = nxt()
     D.h1(f"{sec4}. Creative and text review")
     D.p("Each card combines a media image, a title, a description and one URL button. Content risk ratings are our view of the content, made from the content alone and shown beside the results for comparison. Emojis in card text may appear as placeholders.")
-    cur_templates = [t for t in metrics["templates"] if t["year"] == cur]
-    for k, t in enumerate(cur_templates, 1):
-        a, rq = ana_t[t["template"]], req_t[t["template"]]
+    cur_templates = [t for t in metrics["templates"] if t["year"] == cur]          # one row per send
+    dist = M.distinct(metrics, cur)                                                # one entry per template
+    for k, (name, rows_) in enumerate(dist.items(), 1):
+        t = rows_[0]
+        st = M.card_stats(rows_)
+        a, rq = ana_t[name], req_t[name]
         card = rq.get("card", {})
         desc = card.get("description", "")
         desc = " ".join(desc) if isinstance(desc, list) else desc
-        D.h2(f"{sec4}.{k} {t['template']}: {a['content_risk'].lower()} content risk" + (f" ({rq['label']})" if rq.get("label") else ""))
+        D.h2(f"{sec4}.{k} {name}: {a['content_risk'].lower()} content risk" + (f" ({rq['label']})" if rq.get("label") and rq["label"] != name else ""))
         wl, wr = 3900, PAGE_W - 3900
         tb = D.d.add_table(rows=0, cols=2)
         _tbl_setup(tb, [wl, wr])
         hr = tb.add_row()
         _row_flags(hr)
-        write_cell(hr.cells[0], f"**{t['template']}**   |   {M.nice_date(t['date'])}   |   GoogleID {t['google_id_short']}", size=8.5, bold=True, color="FFFFFF", fill=hf, width=wl)
-        write_cell(hr.cells[1], f"DeliveryRate **{M.fmt_pct(M.shown_rate(t, 'DeliveryRate'))}**   |   ReadRate **{M.fmt_pct(M.shown_rate(t, 'ReadRate'))}**   |   Click rate **{M.fmt_pct(M.shown_rate(t, 'P2AResponseRate'))}**   |   Content risk: **{a['content_risk']}**",
+        write_cell(hr.cells[0], f"**{name}**   |   {st['when']}   |   GoogleID {t['google_id_short']}", size=8.5, bold=True, color="FFFFFF", fill=hf, width=wl)
+        write_cell(hr.cells[1], f"DeliveryRate **{M.fmt_pct(st['dr'])}**   |   ReadRate **{M.fmt_pct(st['rr'])}**   |   Click rate **{M.fmt_pct(st['cr'])}**   |   Content risk: **{a['content_risk']}**",
                    size=8.5, fill=_risk_fill(a["content_risk"]), width=wr)
         for c_ in hr.cells:
             for p_ in c_.paragraphs:
@@ -392,15 +396,15 @@ def build_docx(metrics, analysis, request, out_path, style, image_dir):
         img = rq.get("image")
         if img and os.path.exists(os.path.join(image_dir, img)):
             left.append({"picture": os.path.join(image_dir, img), "width": 2.4})
-        left += ["**Card text**", f"Title: \"{card.get('title', '')}\" Description: \"{desc}\" Button: {card.get('button', '')}"]
+        left += ["**Card text**", f"Title: \"{iconify(card.get('title', ''))}\" Description: \"{iconify(desc)}\" Button: {iconify(card.get('button', ''))}"]
         right = [f"**Creative:** {rq.get('creative', '')}", "**Works**"] + [{"bullet": f"**{x['h']}.** {x['b']}"} for x in a.get("works", [])] + \
                 ["**Watch-outs**"] + [{"bullet": f"**{x['h']}.** {x['b']}"} for x in a.get("watch_outs", [])]
         write_cell(br.cells[0], left, size=7.5, width=wl)
         write_cell(br.cells[1], right, size=8.5, width=wr)
         D.gap()
 
-    k = len(cur_templates) + 1
-    D.h2(f"{sec4}.{k} Click rate across the {len(cur_templates)} templates ({ylabel(cur)})")
+    k = len(dist) + 1
+    D.h2(f"{sec4}.{k} Click rate by send ({len(dist)} templates, {len(cur_templates)} sends, {ylabel(cur)})")
     D.p("P2AResponseRate is the sheet's click rate (P2AResponses \u00F7 Messages Read). The creative and text are only seen by people who read the message, so the read base is the right measure for judging them. The delivered base is shown for an end-to-end view (marked *, our calculation).")
     g = metrics["groups"]["year"][str(cur)]
     rows = []
@@ -409,11 +413,11 @@ def build_docx(metrics, analysis, request, out_path, style, image_dir):
         rows.append([t["template"], M.nice_date(t["date"]).rsplit(" ", 1)[0], M.fmt_int(t["counts"]["read"]), M.fmt_int(t["counts"]["p2a_responses"]),
                      {"t": "**" + M.fmt_pct(M.shown_rate(t, "P2AResponseRate")) + "**", "fill": "green" if idx >= 1 else ("amber" if idx >= 0.75 else "red")},
                      f"{idx:.2f}x", M.fmt_pct(t["rates"]["click_rate_delivered_base"])])
-    rows.append([{"t": f"**Total ({len(cur_templates)} templates)**", "fill": "grey"}, {"t": "", "fill": "grey"}, {"t": f"**{M.fmt_int(g['counts']['read'])}**", "fill": "grey"},
+    rows.append([{"t": f"**Total ({len(cur_templates)} sends)**", "fill": "grey"}, {"t": "", "fill": "grey"}, {"t": f"**{M.fmt_int(g['counts']['read'])}**", "fill": "grey"},
                  {"t": f"**{M.fmt_int(g['counts']['p2a_responses'])}**", "fill": "grey"}, {"t": f"**{M.fmt_pct(g['rates']['P2AResponseRate'])}**", "fill": "grey"},
                  {"t": "**1.00x**", "fill": "grey"}, {"t": f"**{M.fmt_pct(g['rates']['click_rate_delivered_base'])}**", "fill": "grey"}])
     add_table(D.d, [2550, 800, 1150, 1150, 1350, 1346, 1400], ["Template", "Date", "Messages Read", "P2AResponses", "P2AResponseRate (click rate)", "Index vs blended click rate*", "Click rate, delivered base*"], rows, size=8, header_fill=hf)
-    D.note(f"Index = template click rate \u00F7 blended click rate of the {len(cur_templates)} templates ({M.fmt_pct(g['rates']['P2AResponseRate'])}).")
+    D.note(f"Index = click rate of the send \u00F7 blended click rate of all {len(cur_templates)} sends ({M.fmt_pct(g['rates']['P2AResponseRate'])}).")
 
     fm = analysis.get("feature_matrix")
     if fm and fm.get("rows"):
@@ -437,7 +441,7 @@ def build_docx(metrics, analysis, request, out_path, style, image_dir):
             c = r.get("card", {})
             desc = c.get("description", "")
             desc = " ".join(desc) if isinstance(desc, list) else desc
-            rows.append([r["template"], M.nice_date(t["date"]), [f"**Title:** \"{c.get('title', '')}\"", f"**Description:** \"{desc}\"", f"**Button:** {c.get('button', '')}"],
+            rows.append([r["template"], M.nice_date(t["date"]), [f"**Title:** \"{iconify(c.get('title', ''))}\"", f"**Description:** \"{iconify(desc)}\"", f"**Button:** {iconify(c.get('button', ''))}"],
                          f"Messages Submitted {M.fmt_int(t['counts']['submitted'])}; DeliveryRate {M.fmt_pct(M.shown_rate(t, 'DeliveryRate'))}; ReadRate {M.fmt_pct(M.shown_rate(t, 'ReadRate'))}; click rate **{M.fmt_pct(M.shown_rate(t, 'P2AResponseRate'))}**"])
         add_table(D.d, [1650, 900, 4200, 2996], ["Template", "Date", "Card text", "Metrics"], rows, size=8, header_fill=hf)
         D.gap()

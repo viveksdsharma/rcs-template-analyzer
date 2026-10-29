@@ -2,10 +2,12 @@
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.DS_Store
 out/
 history*.csv
+training*.csv
+# Workbooks are ignored EXCEPT the bundled seed data and the test fixtures. Keep the repository PRIVATE: data/seed holds real brand data.
 *.xlsx
+!data/seed/*.xlsx
 !tests/fixtures/*.xlsx
-# The Vi template carries a Vodafone Idea sensitivity label. Keep it out of any repository unless the repo is
-# private and InfoSec has agreed. The app also lets you upload it per session.
-assets/*.pptx

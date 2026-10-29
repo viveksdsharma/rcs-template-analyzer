@@ -1,5 +1,5 @@
 {
-  "_readme": "The knowledge pack. It is added to every LLM prompt and used by the rules engine. Every item has an ID and a source. Edit this file, not the code. Items marked to_be_vetted must be confirmed by their owner before the app is used for real brands.",
+  "_readme": "The knowledge pack. It is added to every language-model prompt and used by the Internal ML model. Every item has an ID and a source. Edit this file, not the code. Items marked to_be_vetted must be confirmed by their owner before the app is used for real brands.",
   "guardrails": [
     {"id": "G1", "text": "Reminder messages with an assuring tone get a higher CTA rate than urgent ones; urgent tone in reminders reads as nagging.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External), guardrail: tone x intent", "status": "to_be_vetted"},
     {"id": "G2", "text": "BFSI, insurance and healthcare informational and transactional messages perform best in a formal tone.", "source": "Vi RBM Playbook, CPaaS Edition (C1 External)", "status": "to_be_vetted"},
@@ -18,6 +18,7 @@
   "do_not_assert": [
     "That the notification preview shows exactly N characters of the title or description (the character limit is not verified). Say 'the preview may cut the text' only.",
     "Any claim about how an operator, handset or Google client changed behaviour between two periods.",
-    "Any causal claim about visits, orders or conversion: the performance sheet holds none of these."
+    "Any causal claim about visits, orders or conversion: the performance sheet holds none of these.",
+    "Anything about who the audience was. Brands do not share targeting, so audience is unknown."
   ]
 }
